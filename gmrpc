@@ -1,0 +1,118 @@
+#!/bin/bash
+export ERP_CLIENTID="1159616015651573880"
+export ERP_DIR="$HOME/.local/share/gmrpc"
+
+gmrpc.write_config() {
+cat > "$ERP_DIR"/config.ini << EOL
+[Identifiers]
+ClientID=$ERP_CLIENTID
+
+[State]
+State=$1​​
+Details=$2​​
+StartTimestamp=$3
+EndTimestamp=$4
+
+[Images]
+LargeImage=https://i.imgur.com/PUywCrW.gif
+LargeImageTooltip=Listening to Music
+SmallImage=$6
+SmallImageTooltip=$6
+EOL
+}
+
+gmrpc.get_easyrp() {
+    if [[ ! -d "$ERP_DIR" || ! -f "$ERP_DIR/easyrp" ]]; then
+        echo "EasyRP not found in '$ERP_DIR'. Downloading now..."
+        
+        rm -rf "$ERP_DIR"
+        
+        mkdir -p "$ERP_DIR"
+        mkdir -p "$HOME"/.cache
+        
+        curl -sL "https://github.com/Pizzabelly/EasyRP/releases/download/v3.0/EasyRP-v3.0-linux.tar.gz" -o "$HOME"/.cache/EasyRP-linux.tar.gz || \
+        { echo "EasyRP download failed!"; rm -rf "$ERP_DIR"; exit 1; }
+        cd "$ERP_DIR"
+        
+        tar xzf "$HOME"/.cache/EasyRP-linux.tar.gz -C "$ERP_DIR" || \
+        { echo "Failed to extract EasyRP!"; rm -rf "$ERP_DIR"; exit 1; }
+        mv "$ERP_DIR"/EasyRP-v3.0-linux/* "$ERP_DIR"/
+        
+        rm -rf "$ERP_DIR"/EasyRP-v3.0-linux
+        rm -f "$HOME"/.cache/EasyRP-linux.tar.gz
+        
+        if [[ ! -f "$ERP_DIR/easyrp" ]]; then
+        	echo "EasyRP download failed!"
+        	rm -rf "$ERP_DIR"
+        	exit 1
+        else
+        	chmod +x "$ERP_DIR"/easyrp
+        fi
+        
+        gmrpc.write_config "gmrpc" "" "" "" "playerlarge"
+    fi
+}
+
+gmrpc.easyrp_start() {
+    while true
+    do
+    	mapfile -t ERP_NOW_PLAYING < <(playerctl --player org.gnome.Music metadata --format '{{playerName}}|{{lc(status)}}|{{artist}}|{{title}}|{{position}}|{{mpris:length}}' | tr '|' '\n')
+    	
+    	if [[ "$ERP_NOW_PLAYING" == "" ]]; then
+    		if [[ "$ERP_PID" != "" ]]; then
+    			kill $ERP_PID
+    			ERP_PID=""
+    		fi
+    		
+    		sleep 1
+    	else
+    		if [[ "$ERP_PID" == "" ]]; then
+			if [ ! -d "$ERP_DIR" ]; then
+			    	echo "ERP directory does not exist or is not a directory: $ERP_DIR"
+			else
+				cd "$ERP_DIR"
+			fi
+			
+			if [ -e "$ERP_DIR/nohup.out" ]; then
+			    	rm -f "$ERP_DIR/nohup.out"
+			fi
+			
+			LD_LINUX_LOC=$(ldd "$ERP_DIR/easyrp" | grep 'ld-linux' | awk '{print $3}')
+			
+			if [ -n "$LD_LINUX_LOC" ]; then
+			    	"$LD_LINUX_LOC" "$ERP_DIR/easyrp" >> "$ERP_DIR/nohup.out" 2>&1 &
+			else
+			    	"$ERP_DIR/easyrp" >> "$ERP_DIR/nohup.out" 2>&1 &
+			fi
+			
+			ERP_PID=$!
+			sleep 1
+    		fi
+    		
+    		if [[ "${ERP_NOW_PLAYING[1]}" == "playing" ]]; then
+			ERP_TIME_START=$(date +%s)
+			ERP_PLAYER_REMAINS=$((${ERP_NOW_PLAYING[5]}-${ERP_NOW_PLAYING[4]}))
+			ERP_PLAYER_REMAINS=$((ERP_PLAYER_REMAINS/1000000))
+			ERP_TIME_END=$((ERP_TIME_START+ERP_PLAYER_REMAINS))
+		else
+			ERP_TIME_START=""
+			ERP_TIME_END=""
+		fi
+		
+		if [[ ! -z "${ERP_NOW_PLAYING[3]}" && "${ERP_NOW_PLAYING[3]}" != "$ERP_LAST_PLAYING" || "${ERP_NOW_PLAYING[1]}" != "$ERP_LAST_STATE" ]]; then
+			gmrpc.write_config "${ERP_NOW_PLAYING[3]}" "${ERP_NOW_PLAYING[2]}" "$ERP_TIME_START" "$ERP_TIME_END" "${ERP_NOW_PLAYING[0]}" "${ERP_NOW_PLAYING[1]}"
+		fi
+		
+		ERP_LAST_PLAYING="${ERP_NOW_PLAYING[3]}"
+		ERP_LAST_STATE="${ERP_NOW_PLAYING[1]}"
+		
+		sleep 1
+		unset ERP_NOW_PLAYING ERP_TIME_TYPE ERP_TIME_END ERP_PLAYER_REMAINS
+	fi
+    done
+}
+
+echo "Starting Gnome Music RPC..."
+ERP_PID=""
+gmrpc.get_easyrp
+gmrpc.easyrp_start
